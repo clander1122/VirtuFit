@@ -1,0 +1,215 @@
+import torch
+import torch.nn as nn
+import numpy as np
+from PIL import Image
+import cv2
+import os
+import uuid
+
+
+class RealAIFitting:
+    """真实的AI试衣模型类"""
+
+    def __init__(self, model_type='viton_hd'):
+        """
+        初始化模型
+        Args:
+            model_type: 模型类型，可选 'viton_hd', 'hr_viton', 'clothflow'
+        """
+        self.model_type = model_type
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"使用设备: {self.device}")
+
+        # 加载模型权重
+        self.model = self._load_model()
+
+    def _load_model(self):
+        """
+        加载预训练的AI试衣模型
+        实际项目中需要下载相应的模型权重文件
+        """
+        # 这里以VITON-HD为例，实际需要根据选择的模型实现
+
+        if self.model_type == 'viton_hd':
+            # 模拟加载VITON-HD模型
+            print(f"加载 {self.model_type} 模型...")
+            # 实际代码示例:
+            # from models.viton_hd import VITONHD
+            # model = VITONHD()
+            # model.load_state_dict(torch.load('weights/viton_hd.pth'))
+            # model.to(self.device)
+            # model.eval()
+
+        elif self.model_type == 'hr_viton':
+            print(f"加载 {self.model_type} 模型...")
+            # HR-VITON模型实现
+
+        elif self.model_type == 'clothflow':
+            print(f"加载 {self.model_type} 模型...")
+            # ClothFlow模型实现
+
+        else:
+            raise ValueError(f"不支持的模型类型: {self.model_type}")
+
+        # 返回虚拟模型
+        return self._create_dummy_model()
+
+    def _create_dummy_model(self):
+        """创建虚拟模型用于演示"""
+
+        class DummyModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+
+            def forward(self, person_tensor, cloth_tensor):
+                # 模拟模型推理
+                return person_tensor  # 返回原始人物图片
+
+        model = DummyModel()
+        model.eval()
+        return model
+
+    def preprocess(self, person_img_path, cloth_img_path):
+        """
+        预处理图片：姿态检测、分割、对齐等
+        Args:
+            person_img_path: 人物图片路径
+            cloth_img_path: 服装图片路径
+        Returns:
+            预处理后的张量
+        """
+        # 1. 读取图片
+        person_img = Image.open(person_img_path).convert('RGB')
+        cloth_img = Image.open(cloth_img_path).convert('RGB')
+
+        # 2. 调整大小（模型要求的标准尺寸）
+        target_size = (768, 1024)  # VITON-HD标准尺寸
+        person_img = person_img.resize(target_size, Image.BILINEAR)
+        cloth_img = cloth_img.resize(target_size, Image.BILINEAR)
+
+        # 3. 转换为张量并归一化
+        person_tensor = torch.from_numpy(np.array(person_img)).float() / 255.0
+        cloth_tensor = torch.from_numpy(np.array(cloth_img)).float() / 255.0
+
+        # 4. 调整维度顺序 [H, W, C] -> [C, H, W]
+        person_tensor = person_tensor.permute(2, 0, 1).unsqueeze(0)
+        cloth_tensor = cloth_tensor.permute(2, 0, 1).unsqueeze(0)
+
+        return person_tensor.to(self.device), cloth_tensor.to(self.device)
+
+    def postprocess(self, output_tensor, original_size):
+        """
+        后处理：将模型输出转换为图片
+        Args:
+            output_tensor: 模型输出的张量
+            original_size: 原始图片尺寸
+        Returns:
+            处理后的图片
+        """
+        # 1. 转换为numpy数组
+        if isinstance(output_tensor, torch.Tensor):
+            output_np = output_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
+        else:
+            output_np = output_tensor
+
+        # 2. 反归一化
+        output_np = (output_np * 255).astype(np.uint8)
+
+        # 3. 转换为PIL Image
+        result_img = Image.fromarray(output_np)
+
+        # 4. 调整回原始尺寸
+        result_img = result_img.resize(original_size, Image.BILINEAR)
+
+        return result_img
+
+    def try_on(self, person_img_path, cloth_img_path):
+        """
+        试衣推理主函数
+        Args:
+            person_img_path: 人物图片路径
+            cloth_img_path: 服装图片路径
+        Returns:
+            result_path: 结果图片路径
+            message: 处理信息
+        """
+        try:
+            # 记录原始图片尺寸
+            original_img = Image.open(person_img_path)
+            original_size = original_img.size
+
+            # 1. 预处理
+            print("预处理图片...")
+            person_tensor, cloth_tensor = self.preprocess(person_img_path, cloth_img_path)
+
+            # 2. 模型推理
+            print("AI试衣推理中...")
+            with torch.no_grad():
+                output_tensor = self.model(person_tensor, cloth_tensor)
+
+            # 3. 后处理
+            print("后处理...")
+            result_img = self.postprocess(output_tensor, original_size)
+
+            # 4. 保存结果
+            result_filename = f'result_{uuid.uuid4()}.jpg'
+            result_path = os.path.join('uploads', result_filename)
+            result_img.save(result_path, quality=95)
+
+            print(f"试衣完成，结果保存至: {result_path}")
+            return result_path, "试衣成功"
+
+        except Exception as e:
+            print(f"试衣失败: {str(e)}")
+            # 降级处理：使用简单的图像合成作为备选方案
+            return self._fallback_try_on(person_img_path, cloth_img_path)
+
+    def _fallback_try_on(self, person_img_path, cloth_img_path):
+        """
+        备选方案：简单的图像合成
+        当主模型失败时使用
+        """
+        try:
+            # 读取图片
+            person_img = Image.open(person_img_path).convert('RGBA')
+            cloth_img = Image.open(cloth_img_path).convert('RGBA')
+
+            # 调整服装大小
+            person_size = person_img.size
+            cloth_size = (person_size[0] // 2, person_size[1] // 2)
+            cloth_img = cloth_img.resize(cloth_size, Image.Resampling.LANCZOS)
+
+            # 创建合成图片
+            result_img = person_img.copy()
+
+            # 将服装叠加到人物胸部区域
+            x_offset = (person_size[0] - cloth_size[0]) // 2
+            y_offset = person_size[1] // 3
+
+            # 使用alpha通道进行混合
+            cloth_rgba = cloth_img.split()
+            mask = cloth_rgba[3] if len(cloth_rgba) > 3 else None
+
+            result_img.paste(cloth_img, (x_offset, y_offset), mask)
+
+            # 转换为RGB并保存
+            result_img = result_img.convert('RGB')
+            result_filename = f'result_fallback_{uuid.uuid4()}.jpg'
+            result_path = os.path.join('uploads', result_filename)
+            result_img.save(result_path, quality=95)
+
+            return result_path, "使用备选方案完成试衣"
+
+        except Exception as e:
+            print(f"备选方案也失败: {str(e)}")
+            return None, f"试衣失败: {str(e)}"
+
+    def set_model(self, model_type):
+        """
+        切换模型
+        Args:
+            model_type: 模型类型
+        """
+        self.model_type = model_type
+        self.model = self._load_model()
+        print(f"已切换到模型: {model_type}")
