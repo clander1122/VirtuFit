@@ -1,0 +1,187 @@
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+from real_fitting_model import RealAIFitting  # 导入真实模型
+import uuid
+import os
+from werkzeug.utils import secure_filename
+
+app = Flask(__name__)
+CORS(app)  # 允许跨域请求
+
+# 配置
+UPLOAD_FOLDER = './uploads'
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'webp'}
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB限制
+
+# 确保上传目录存在
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# 初始化AI模型
+ai_fitting_model = RealAIFitting()
+
+
+def allowed_file(filename):
+    """检查文件扩展名"""
+    return '.' in filename and \
+        filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+@app.route('/api/fitting/upload', methods=['POST'])
+def upload_images():
+    """上传人物和服装图片"""
+    try:
+        # 检查是否有文件
+        if 'person_image' not in request.files or 'cloth_image' not in request.files:
+            return jsonify({'error': '请上传人物和服装图片'}), 400
+
+        person_file = request.files['person_image']
+        cloth_file = request.files['cloth_image']
+
+        if person_file.filename == '' or cloth_file.filename == '':
+            return jsonify({'error': '请选择有效的图片文件'}), 400
+
+        if not (allowed_file(person_file.filename) and allowed_file(cloth_file.filename)):
+            return jsonify({'error': '只允许上传PNG、JPG、JPEG、WEBP格式的图片'}), 400
+
+        # 生成唯一文件名
+        person_filename = f'person_{uuid.uuid4()}_{secure_filename(person_file.filename)}'
+        cloth_filename = f'cloth_{uuid.uuid4()}_{secure_filename(cloth_file.filename)}'
+
+        person_path = os.path.join(app.config['UPLOAD_FOLDER'], person_filename)
+        cloth_path = os.path.join(app.config['UPLOAD_FOLDER'], cloth_filename)
+
+        # 保存文件
+        person_file.save(person_path)
+        cloth_file.save(cloth_path)
+
+        return jsonify({
+            'success': True,
+            'person_path': person_path,
+            'cloth_path': cloth_path,
+            'person_url': f'/api/fitting/image/{person_filename}',
+            'cloth_url': f'/api/fitting/image/{cloth_filename}',
+            'message': '图片上传成功'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/fitting/tryon', methods=['POST'])
+def ai_fitting():
+    """AI试衣主接口"""
+    try:
+        data = request.json
+
+        # 验证输入
+        if not data or 'person_path' not in data or 'cloth_path' not in data:
+            return jsonify({'error': '缺少必要参数'}), 400
+
+        person_path = data['person_path']
+        cloth_path = data['cloth_path']
+
+        # 检查文件是否存在
+        if not (os.path.exists(person_path) and os.path.exists(cloth_path)):
+            return jsonify({'error': '图片文件不存在'}), 404
+
+        # 调用AI试衣功能
+        result_path, message = ai_fitting_model.try_on(person_path, cloth_path)
+
+        if result_path:
+            return jsonify({
+                'success': True,
+                'result_path': result_path,
+                'message': message,
+                'result_url': f'/api/fitting/result/{os.path.basename(result_path)}'
+            })
+        else:
+            return jsonify({'error': message}), 500
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/fitting/result/<filename>')
+def get_result(filename):
+    """获取试衣结果图片"""
+    try:
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        if not os.path.exists(filepath):
+            return jsonify({'error': '文件不存在'}), 404
+
+        return send_file(filepath, mimetype='image/jpeg')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/fitting/image/<filename>')
+def get_image(filename):
+    """获取上传的原始图片"""
+    try:
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        if not os.path.exists(filepath):
+            return jsonify({'error': '文件不存在'}), 404
+
+        return send_file(filepath)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/fitting/models', methods=['GET'])
+def get_models():
+    """获取可用的AI模型列表"""
+    models = [
+        {
+            'id': 'viton_hd',
+            'name': 'VITON-HD',
+            'description': '高分辨率虚拟试衣模型',
+            'type': '全身试衣'
+        },
+        {
+            'id': 'hr_viton',
+            'name': 'HR-VITON',
+            'description': '高分辨率保留细节的试衣模型',
+            'type': '全身试衣'
+        },
+        {
+            'id': 'clothflow',
+            'name': 'ClothFlow',
+            'description': '考虑布料物理特性的试衣模型',
+            'type': '动态试衣'
+        }
+    ]
+    return jsonify({'models': models})
+
+
+@app.route('/api/fitting/history', methods=['GET'])
+def get_fitting_history():
+    """获取试衣历史记录"""
+    # 实际项目应连接数据库
+    return jsonify({
+        'history': [
+            {
+                'id': '1',
+                'timestamp': '2024-01-15 10:30:00',
+                'person_url': '/api/fitting/image/person_001.jpg',
+                'cloth_url': '/api/fitting/image/cloth_001.jpg',
+                'result_url': '/api/fitting/result/result_001.jpg'
+            }
+        ]
+    })
+
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """健康检查接口"""
+    return jsonify({
+        'status': 'healthy',
+        'service': 'ai-fitting-service',
+        'version': '1.0.0'
+    })
+
+
+if __name__ == '__main__':
+    print("AI试衣服务启动中...")
+    print(f"上传目录: {os.path.abspath(UPLOAD_FOLDER)}")
+    print("服务地址: http://localhost:5000")
+    app.run(host='0.0.0.0', port=5000, debug=True)
